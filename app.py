@@ -7,15 +7,12 @@ import datetime
 import time
 import streamlit as st # Streamlit 라이브러리 임포트
 
-# tqdm은 Streamlit 환경에서 콘솔 출력으로만 작동하므로, 실제 진행 바를 위해 Streamlit의 st.progress를 사용합니다.
-# from tqdm.notebook import tqdm
-
 # --- DB 연결 설정 (Azure MySQL에 맞게 변경) ---
 # DB_CONFIG는 Streamlit Secrets를 통해 관리하는 것이 보안상 안전합니다.
 # .streamlit/secrets.toml 파일에 다음 형식으로 저장:
 # [mysql]
 # host = "quant.mysql.database.azure.com"
-# user = "quant"
+# user = "quant" # Azure MySQL 사용자명은 사용자명@서버이름 형식입니다. 예: user@server_name
 # password = "a303737!"
 # database = "stock_db"
 # charset = "utf8"
@@ -46,8 +43,14 @@ DB_CONFIG = get_db_config() # Streamlit Secrets에서 DB_CONFIG 로드
 # SQLAlchemy 엔진 설정 (종목코드 리스트 로딩에 사용)
 # DB_CONFIG가 로드된 후에 엔진을 생성합니다.
 if DB_CONFIG:
+    # user는 SQLAlchemy 연결 문자열에서 @ 뒤에 server_name을 붙이지 않습니다.
+    # pymysql 드라이버가 secrets.toml의 user 값을 그대로 사용하기 때문입니다.
+    # 단, secrets.toml의 user 값 자체는 'user@server_name' 형식이어야 합니다.
+    db_user_for_engine = DB_CONFIG["user"]
+    db_password_for_engine = DB_CONFIG["password"]
+
     engine = create_engine(
-        f'mysql+pymysql://{DB_CONFIG["user"]}:{DB_CONFIG["password"]}@{DB_CONFIG["host"]}:3306/{DB_CONFIG["database"]}',
+        f'mysql+pymysql://{db_user_for_engine}:{db_password_for_engine}@{DB_CONFIG["host"]}:3306/{DB_CONFIG["database"]}',
         pool_recycle=300,
         pool_pre_ping=True,
         pool_timeout=60
@@ -68,7 +71,6 @@ def get_safe_pymysql_connection():
     for attempt in range(5):
         try:
             conn = pymysql.connect(**DB_CONFIG)
-            # st.write(f"PyMySQL 연결 성공 (시도 {attempt + 1}회).") # Streamlit 앱에 너무 많은 로그 출력 방지
             return conn
         except pymysql.err.OperationalError as op_e:
             st.warning(f"PyMySQL 연결 시도 {attempt + 1}회 실패: {op_e}")
@@ -78,6 +80,9 @@ def get_safe_pymysql_connection():
             else:
                 st.error(f"PyMySQL 연결에 여러 번 실패했습니다. 마지막 오류: {op_e}")
                 return None
+        except Exception as e:
+            st.error(f"예상치 못한 연결 오류 발생: {e}")
+            return None
     return None
 
 
@@ -102,6 +107,7 @@ def get_financial_data(cursor, stock_code, base_date, account_name, public_type=
     return None
 
 def get_ticker_data(cursor, stock_code, column_name):
+    """kor_ticker 테이블에서 데이터를 가져옵니다."""
     query = f"""
         SELECT `{column_name}`
         FROM kor_ticker
@@ -114,8 +120,47 @@ def get_ticker_data(cursor, stock_code, column_name):
         if result and result[0] is not None:
             return float(result[0])
     except pymysql.Error as e:
-        # st.error(f"DB 조회 오류 (ticker): {stock_code}, {column_name} - {e}") # 너무 많은 로그 방지
+        # st.error(f"DB 조회 오류 (ticker): {stock_code}, {column_name} - {e}")
         pass
+    return None
+
+def get_value_data(cursor, stock_code, account_name):
+    """kor_value 테이블에서 최신 기준일의 특정 계정 데이터를 가져옵니다."""
+    # kor_value 테이블의 가장 최근 기준일을 먼저 찾습니다.
+    query_latest_date = f"""
+        SELECT MAX(기준일)
+        FROM kor_value
+        WHERE 종목코드 = '{stock_code}'
+          AND 계정 = '{account_name}'
+    """
+    latest_base_date = None
+    try:
+        cursor.execute(query_latest_date)
+        date_result = cursor.fetchone()
+        if date_result and date_result[0]:
+            # 날짜 객체를 문자열로 변환하여 쿼리에 사용
+            latest_base_date = date_result[0].strftime('%Y-%m-%d')
+    except pymysql.Error as e:
+        # st.error(f"DB 조회 오류 (value_date): {stock_code}, {account_name} - {e}")
+        return None
+
+    if latest_base_date:
+        query = f"""
+            SELECT 값
+            FROM kor_value
+            WHERE 종목코드 = '{stock_code}'
+              AND 계정 = '{account_name}'
+              AND 기준일 = '{latest_base_date}'
+            LIMIT 1
+        """
+        try:
+            cursor.execute(query)
+            result = cursor.fetchone()
+            if result and result[0] is not None:
+                return float(result[0])
+        except pymysql.Error as e:
+            # st.error(f"DB 조회 오류 (value_data): {stock_code}, {account_name} - {e}")
+            pass
     return None
 
 def calculate_intrinsic_value_per_share(stock_code, base_date, bond_10yr_rate_input, inflation_rate_input):
@@ -130,7 +175,7 @@ def calculate_intrinsic_value_per_share(stock_code, base_date, bond_10yr_rate_in
         'PER': np.nan,
         'PCR': np.nan,
         'PSR': np.nan,
-        'DY': np.nan,
+        'DY': np.nan, 
         '워렌버핏DCF_적정주가': np.nan,
         '계산상태': '실패',
         '실패사유': '초기화'
@@ -166,9 +211,9 @@ def calculate_intrinsic_value_per_share(stock_code, base_date, bond_10yr_rate_in
         other_long_term_liabilities = 0
         deferred_tax_liabilities_raw = get_financial_data(cursor, stock_code, base_date, '이연법인세부채')
         deferred_tax_liabilities = deferred_tax_liabilities_raw * UNIT_MULTIPLIER_FS if deferred_tax_liabilities_raw is not None else 0
-         
+        
         operating_liabilities = total_liabilities - (other_long_term_liabilities + deferred_tax_liabilities)
-         
+        
         adjusted_capital = operating_assets - operating_liabilities
         if adjusted_capital == 0:
             data_for_return['실패사유'] = "조정자본총계 0"
@@ -186,8 +231,8 @@ def calculate_intrinsic_value_per_share(stock_code, base_date, bond_10yr_rate_in
 
         shareholder_profit = net_income + depreciation - capex
         # if shareholder_profit < 0 and abs(shareholder_profit) > adjusted_capital * 0.5:
-        #     # return None, "주주이익 음수" # 필요에 따라 음수 주주이익 제외 가능
-        #     pass
+        #    # return None, "주주이익 음수" # 필요에 따라 음수 주주이익 제외 가능
+        #    pass
 
 
         # --- 3. 자본효율 계산 ---
@@ -223,7 +268,7 @@ def calculate_intrinsic_value_per_share(stock_code, base_date, bond_10yr_rate_in
         if current_price == 0:
             data_for_return['실패사유'] = "종가 0"
             return data_for_return
-         
+            
         total_shares = market_cap / current_price
         shares_excluding_treasury = total_shares
 
@@ -235,64 +280,40 @@ def calculate_intrinsic_value_per_share(stock_code, base_date, bond_10yr_rate_in
         intrinsic_value_per_share = (adjusted_capital / shares_excluding_treasury) * capital_multiplier
         data_for_return['내재가치'] = intrinsic_value_per_share
 
-        # --- 추가 지표 가져오기 ---
-        data_for_return['PBR'] = get_ticker_data(cursor, stock_code, 'PBR')
-        data_for_return['PER'] = get_ticker_data(cursor, stock_code, 'PER')
-        data_for_return['PCR'] = get_ticker_data(cursor, stock_code, 'PCR')
-        data_for_return['PSR'] = get_ticker_data(cursor, stock_code, 'PSR')
-        data_for_return['DY'] = get_ticker_data(cursor, stock_code, 'DY')
+        # --- 추가 지표 가져오기 (kor_value에서 가져옴) ---
+        data_for_return['PBR'] = get_value_data(cursor, stock_code, 'PBR')
+        data_for_return['PER'] = get_value_data(cursor, stock_code, 'PER')
+        data_for_return['PCR'] = get_value_data(cursor, stock_code, 'PCR')
+        data_for_return['PSR'] = get_value_data(cursor, stock_code, 'PSR')
+        data_for_return['DY'] = get_value_data(cursor, stock_code, 'DY') 
 
         # --- 워렌 버핏 DCF 적정주가 계산 (간이 모델) ---
-        # 간단하게 최근 EPS에 ROE(성장률 가정)를 반영한 후 요구수익률로 할인
-        # EPS = 당기순이익 / 발행주식수 (여기서는 total_shares 사용)
         eps = net_income / shares_excluding_treasury if shares_excluding_treasury != 0 else 0
 
-        # 성장률 가정: 여기서는 ROE를 성장률의 대용으로 사용합니다.
-        # 더 정교한 분석을 위해서는 과거 EPS/매출액 성장률, 애널리스트 성장률 추정치 등을 사용해야 합니다.
-        roe_raw = get_financial_data(cursor, stock_code, base_date, '자본', public_type='y') # ROE를 구하려면 자본총계도 필요
+        roe_raw = get_financial_data(cursor, stock_code, base_date, '자본', public_type='y') 
         if roe_raw is not None and adjusted_capital != 0:
-            # ROE는 (당기순이익 / 자본총계) * 100
-            # 재무제표의 '자본' 계정을 사용하여 ROE를 간략하게 계산 (혹은 kor_fs에 ROE 계정이 있다면 직접 가져옴)
-            # 여기서는 편의상 자본효율(capital_efficiency)을 성장률로 가정합니다.
-            # capital_efficiency는 주주이익 / 조정자본총계 이므로, ROE와 유사한 개념으로 볼 수 있습니다.
-            assumed_growth_rate = capital_efficiency # 소수점 형태 (예: 0.15)
+            assumed_growth_rate = capital_efficiency 
         else:
             assumed_growth_rate = 0.05 # 기본 성장률 5% 가정 (데이터 없을 경우)
-        
-        # 요구수익률: 채권 10년물 금리를 요구수익률로 가정 (또는 사용자가 입력한 할인율)
+            
         required_rate_of_return = discount_rate # 위에서 계산한 할인율과 동일하게 사용
 
         if required_rate_of_return == 0:
             data_for_return['실패사유'] = "DCF: 요구수익률 0"
             return data_for_return
 
-        # 간이 DCF 모델: EPS / (요구수익률 - 성장률)
-        # 단, 요구수익률 > 성장률 이어야 함.
         if required_rate_of_return <= assumed_growth_rate:
-            # 성장률이 요구수익률보다 높거나 같으면 무한대 값.
-            # 이 경우 안정적인 DCF 모델 계산이 불가능하므로, 다른 방식으로 처리.
-            # 여기서는 특정 큰 값 또는 NaN으로 처리합니다.
             data_for_return['워렌버핏DCF_적정주가'] = np.nan
             data_for_return['실패사유'] = "DCF: 성장률이 요구수익률보다 높음"
         else:
-            # 영구성장률은 대략 인플레이션율 또는 그 이하로 가정 (예: 0.02)
             perpetual_growth_rate = inflation_rate # 인플레이션율 사용
 
-            # Gordon Growth Model (고든 성장 모델) 간략화
-            # P = D1 / (r - g) 에서 D1을 EPS로 대체 (배당 대신 이익 전체를 주주에게 귀속)
-            # D1 = EPS * (1 + g) -> 여기서는 현재 EPS에 성장률을 바로 적용 (EPS * (1+assumed_growth_rate))
-            # 1년 후 예상 EPS
-            expected_eps_next_year = eps * (1 + assumed_growth_rate)
-            
-            # 고든 성장 모델
-            # (만약 요구수익률이 영구성장률보다 낮거나 같으면 역시 문제 발생)
             if required_rate_of_return > perpetual_growth_rate:
-                buffett_dcf_value = expected_eps_next_year / (required_rate_of_return - perpetual_growth_rate)
+                buffett_dcf_value = (eps * (1 + assumed_growth_rate)) / (required_rate_of_return - perpetual_growth_rate)
                 data_for_return['워렌버핏DCF_적정주가'] = buffett_dcf_value
             else:
                 data_for_return['워렌버핏DCF_적정주가'] = np.nan
                 data_for_return['실패사유'] = "DCF: 요구수익률 <= 영구성장률"
-
 
         data_for_return['계산상태'] = '성공'
         data_for_return['실패사유'] = ''
@@ -320,6 +341,7 @@ st.markdown("Azure Cloud MySQL 데이터베이스에서 재무 데이터를 가�
 
 # 사용자 입력 위젯
 st.sidebar.header("설정")
+# 현재 날짜를 기본값으로 설정
 calculation_base_date = st.sidebar.text_input("기준일 (YYYY-MM-DD)", value=datetime.date.today().strftime('%Y-%m-%d'))
 user_bond_10yr_rate = st.sidebar.slider("10년 국채 금리 (%)", min_value=0.5, max_value=10.0, value=3.0, step=0.1)
 user_inflation_rate = st.sidebar.slider("인플레이션율 (%)", min_value=0.0, max_value=5.0, value=2.0, step=0.1)
@@ -331,33 +353,29 @@ if st.sidebar.button("내재가치 계산 시작"):
     else:
         st.header(f"📈 계산 결과 ({calculation_base_date} 기준)")
         
-        # 1. 전체 종목코드 불러오기
+        # 1. 전체 종목코드 불러오기 (단일 SELECT 쿼리)
         st.info("전체 종목코드 불러오는 중...")
         stock_codes_df = pd.DataFrame()
         try:
-            # pool_pre_ping 설정된 engine 사용
+            # PBR, PER 등은 kor_ticker에서 제거하고, calculate_intrinsic_value_per_share 함수 내에서 kor_value에서 개별적으로 가져오도록 합니다.
             stock_codes_df = pd.read_sql(
                 f"""
-                SELECT 종목코드, 종목명, 종가, PBR, PER, PCR, PSR, RDY
+                SELECT 종목코드, 종목명, 종가
                 FROM kor_ticker
                 WHERE 종목구분 = '보통주' AND 기준일 = (SELECT MAX(기준일) FROM kor_ticker);
-
-                SELECT 종목코드, PBR, PER, PCR, PSR, RDY
-                FROM kor_value
-               
                 """,
                 con=engine
             )
             stock_codes = stock_codes_df['종목코드'].tolist()
-            stock_info_dict = stock_codes_df.set_index('종목코드').to_dict('index') # 모든 ticker 정보 딕셔너리로 저장
+            stock_info_dict = stock_codes_df.set_index('종목코드').to_dict('index') 
             st.success(f"총 {len(stock_codes)}개의 종목코드 불러오기 완료.")
         except Exception as e:
             st.error(f"오류: 종목코드 불러오기 실패 - {e}")
+            st.code(f"SQL 쿼리 문제 또는 DB 접근 권한 문제일 수 있습니다. 상세 오류: {e}", language="text")
             stock_codes = []
         finally:
             if engine:
                 engine.dispose() # SQLAlchemy 엔진의 연결 풀 정리
-                # st.info("SQLAlchemy 엔진 해제 완료.") # Streamlit에서 너무 많은 로그 방지
 
         if not stock_codes:
             st.warning("계산할 종목이 없어 작업을 종료합니다.")
@@ -411,7 +429,7 @@ if st.sidebar.button("내재가치 계산 시작"):
             output_columns = [
                 '종목명', '종목코드', '종가', '내재가치', '내재가치-종가비율(%)', 
                 '워렌버핏DCF_적정주가', '워렌버핏DCF-종가비율(%)',
-                'PBR', 'PER', 'PCR', 'PSR', 'RDY', 
+                'PBR', 'PER', 'PCR', 'PSR', 'DY', # DY로 변경 (RDY -> DY)
                 '계산상태', '실패사유'
             ]
             final_df = results_df[output_columns].copy()
@@ -421,8 +439,8 @@ if st.sidebar.button("내재가치 계산 시작"):
             for col in ['종가', '내재가치', '워렌버핏DCF_적정주가']:
                 final_df[col] = final_df[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else None)
             
-            for col in ['내재가치-종가비율(%)', '워렌버핏DCF-종가비율(%)', 'PBR', 'PER', 'PCR', 'PSR', 'RDY']:
-                 final_df[col] = final_df[col].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else None)
+            for col in ['내재가치-종가비율(%)', '워렌버핏DCF-종가비율(%)', 'PBR', 'PER', 'PCR', 'PSR', 'DY']: # DY로 변경
+                final_df[col] = final_df[col].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else None)
 
 
             st.dataframe(final_df, use_container_width=True) # 결과 데이터프레임 표시
