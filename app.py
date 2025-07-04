@@ -170,12 +170,6 @@ if 'ticker_list' in loaded_data and 'value_list' in loaded_data and \
     st.dataframe(data_bind.head())
 else:
     st.info("`ticker_list` 또는 `value_list`가 없어 병합 예시를 표시할 수 없습니다.")
-
-
-st.sidebar.markdown("---")
-st.sidebar.info("이 앱은 Azure MySQL에서 다양한 주식 데이터를 불러오는 예시입니다.")
-st.sidebar.markdown("© 2025 Data Loader")
-
 fs_list = fs_list.sort_values(['종목코드', '계정', '기준일'])
 fs_list['ttm'] = fs_list.groupby(['종목코드', '계정'], as_index=False)['값'].rolling(
     window=4, min_periods=4).sum()['값']
@@ -190,3 +184,9 @@ fs_list_pivot['GPA'] = fs_list_pivot['매출총이익'] / fs_list_pivot['자산'
 fs_list_pivot['CFO'] = fs_list_pivot['영업활동으로인한현금흐름'] / fs_list_pivot['자산']
 
 fs_list_pivot.round(4).head()
+
+st.sidebar.markdown("---")
+st.sidebar.info("이 앱은 Azure MySQL에서 다양한 주식 데이터를 불러오는 예시입니다.")
+st.sidebar.markdown("© 2025 Data Loader")
+
+
