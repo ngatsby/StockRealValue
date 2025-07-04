@@ -3,3 +3,4 @@ pymysql
 sqlalchemy
 pandas
 numpy
+tqdm 
