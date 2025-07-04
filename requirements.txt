@@ -1,8 +1,8 @@
-streamlit
-pandas
-numpy
-sqlalchemy
-pymysql
-statsmodels
-scipy
-matplotlib
+streamlit>=1.36.0
+pandas>=2.0.0
+numpy>=1.24.0
+sqlalchemy>=2.0.0
+pymysql>=1.1.0
+statsmodels==0.14.0 # Pinning to a specific stable version
+scipy==1.11.4       # Pinning to a specific stable version
+matplotlib>=3.7.0
