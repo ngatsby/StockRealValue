@@ -7,6 +7,19 @@ import datetime
 import time
 import streamlit as st
 
+# --- DB 연결 설정 (Azure MySQL에 맞게 변경) ---
+# .streamlit/secrets.toml 파일에 다음 형식으로 저장:
+# [mysql]
+# host = "quant.mysql.database.azure.com"
+# user = "quant@quant-mysql-server" # <-- 이 부분을 Azure MySQL 서버의 실제 사용자명@서버이름으로 바꿔주세요.
+#                                    #     예: "your_username@your_server_name"
+# password = "a303737!"
+# database = "stock_db"
+# charset = "utf8"
+# connect_timeout = 10
+# read_timeout = 10
+# write_timeout = 10
+
 def get_db_config():
     if st.secrets.get("mysql"):
         config = {
