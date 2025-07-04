@@ -1,6 +1,8 @@
 streamlit
-pymysql
-sqlalchemy
 pandas
 numpy
-tqdm 
+sqlalchemy
+pymysql
+statsmodels
+scipy
+matplotlib
