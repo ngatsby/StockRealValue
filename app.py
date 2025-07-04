@@ -1,13 +1,14 @@
-# test_db_connection.py
+# app.py (혹은 test_all_tables.py 등으로 저장)
 import pymysql
 import streamlit as st
 import time
+import pandas as pd # pandas 추가
 
 # --- DB 연결 설정 (Streamlit Secrets에서 로드) ---
 # .streamlit/secrets.toml 파일에 다음 형식으로 저장되어 있어야 합니다:
 # [mysql]
 # host = "quant.mysql.database.azure.com"
-# user = "quant"
+# user = "quant" # 실제 Azure DB 서버 이름을 포함한 전체 사용자명 (예: youruser@yourserver)
 # password = "a303737!"
 # database = "stock_db"
 # charset = "utf8"
@@ -45,7 +46,7 @@ def get_safe_pymysql_connection():
     if not DB_CONFIG:
         return None
 
-    for attempt in range(3): # 테스트 목적이므로 재시도 횟수 3회로 줄임
+    for attempt in range(3):
         try:
             conn = pymysql.connect(**DB_CONFIG)
             st.success(f"PyMySQL 연결 성공 (시도 {attempt + 1}회).")
@@ -53,7 +54,7 @@ def get_safe_pymysql_connection():
         except pymysql.err.OperationalError as op_e:
             st.warning(f"PyMySQL 연결 시도 {attempt + 1}회 실패: {op_e}")
             if attempt < 2:
-                time.sleep(2 * (attempt + 1)) # 재시도 전 대기 시간
+                time.sleep(2 * (attempt + 1))
                 st.info("PyMySQL 연결 재시도 중...")
             else:
                 st.error(f"PyMySQL 연결에 여러 번 실패했습니다. 마지막 오류: {op_e}")
@@ -64,10 +65,10 @@ def get_safe_pymysql_connection():
     return None
 
 # --- Streamlit 앱의 메인 로직 ---
-st.set_page_config(layout="wide", page_title="Azure MySQL 연결 테스트")
+st.set_page_config(layout="wide", page_title="Azure MySQL 테이블 데이터 확인")
 
-st.title("🔗 Azure MySQL 연결 및 데이터 조회 테스트")
-st.markdown("이 앱은 Azure MySQL 데이터베이스에 연결하고, 주요 테이블의 데이터 존재 여부를 확인합니다.")
+st.title("🔗 Azure MySQL 테이블 데이터 확인")
+st.markdown("데이터베이스에 연결하여 각 테이블의 상위 5개 행을 조회합니다.")
 
 conn = None
 try:
@@ -75,73 +76,27 @@ try:
 
     if conn:
         st.subheader("✅ 데이터베이스 연결 상태: 성공")
-        cursor = conn.cursor()
-
-        # 1. kor_ticker 테이블 행 개수 확인
-        st.markdown("---")
-        st.subheader("📊 `kor_ticker` 테이블 확인")
-        try:
-            cursor.execute("SELECT COUNT(*) FROM kor_ticker")
-            ticker_count = cursor.fetchone()[0]
-            st.write(f"`kor_ticker` 테이블에 총 **{ticker_count}**개의 종목이 있습니다.")
-            if ticker_count == 0:
-                st.warning("경고: `kor_ticker` 테이블이 비어 있습니다. 종목 데이터가 필요합니다.")
-        except pymysql.Error as e:
-            st.error(f"`kor_ticker` 테이블 조회 오류: {e}")
-
-        # 2. kor_fs 테이블 행 개수 확인
-        st.markdown("---")
-        st.subheader("📈 `kor_fs` 테이블 확인")
-        try:
-            cursor.execute("SELECT COUNT(*) FROM kor_fs")
-            fs_count = cursor.fetchone()[0]
-            st.write(f"`kor_fs` 테이블에 총 **{fs_count}**개의 재무 데이터 행이 있습니다.")
-            if fs_count == 0:
-                st.warning("경고: `kor_fs` 테이블이 비어 있습니다. 재무 데이터가 필요합니다.")
-        except pymysql.Error as e:
-            st.error(f"`kor_fs` 테이블 조회 오류: {e}")
-
-        # 3. 특정 종목 데이터 조회 테스트 (삼성전자 예시)
-        st.markdown("---")
-        st.subheader("🔍 특정 종목 데이터 조회 테스트 (예: 삼성전자 005930)")
-        test_stock_code = '005930'
         
-        # kor_ticker에서 종가 가져오기
-        try:
-            query_price = f"SELECT 종가 FROM kor_ticker WHERE 종목코드 = '{test_stock_code}' LIMIT 1"
-            cursor.execute(query_price)
-            price_result = cursor.fetchone()
-            if price_result and price_result[0] is not None:
-                st.write(f"종목코드 `{test_stock_code}`의 종가: **{price_result[0]:,.0f}** 원")
-            else:
-                st.warning(f"경고: 종목코드 `{test_stock_code}`의 종가 데이터를 찾을 수 없습니다.")
-        except pymysql.Error as e:
-            st.error(f"종가 조회 오류: {e}")
-
-        # kor_fs에서 당기순이익 가져오기 (가장 최근 연도)
-        try:
-            # 가장 최근 기준일 찾기 (kor_fs 테이블에서)
-            query_latest_date = f"SELECT MAX(기준일) FROM kor_fs WHERE 종목코드 = '{test_stock_code}' AND 공시구분 = 'y'"
-            cursor.execute(query_latest_date)
-            latest_date_result = cursor.fetchone()
-            latest_base_date = None
-            if latest_date_result and latest_date_result[0]:
-                latest_base_date = latest_date_result[0].strftime('%Y-%m-%d')
-                st.info(f"종목코드 `{test_stock_code}`의 최근 연간 재무 기준일: `{latest_base_date}`")
-            else:
-                st.warning(f"경고: 종목코드 `{test_stock_code}`에 대한 연간 재무 데이터의 최근 기준일을 찾을 수 없습니다.")
-
-            if latest_base_date:
-                query_net_income = f"SELECT 값 FROM kor_fs WHERE 종목코드 = '{test_stock_code}' AND 기준일 = '{latest_base_date}' AND 계정 = '당기순이익' AND 공시구분 = 'y' LIMIT 1"
-                cursor.execute(query_net_income)
-                net_income_result = cursor.fetchone()
-                if net_income_result and net_income_result[0] is not None:
-                    st.write(f"종목코드 `{test_stock_code}`의 최근 당기순이익: **{net_income_result[0]:,.0f}** 억원")
-                else:
-                    st.warning(f"경고: 종목코드 `{test_stock_code}`의 `{latest_base_date}` 기준 '당기순이익' 데이터를 찾을 수 없습니다.")
+        target_tables = ['kor_ticker', 'kor_fs', 'kor_value', 'kor_price']
+        
+        for table_name in target_tables:
+            st.markdown("---")
+            st.subheader(f"📊 `{table_name}` 테이블 상위 5줄 조회")
             
-        except pymysql.Error as e:
-            st.error(f"당기순이익 조회 오류: {e}")
+            try:
+                # pandas를 사용하여 쿼리 결과를 DataFrame으로 바로 가져옵니다.
+                # 이는 PyMySQL Cursor를 직접 사용하는 것보다 편리하고, Streamlit display에 더 적합합니다.
+                query = f"SELECT * FROM `{table_name}` LIMIT 5"
+                df = pd.read_sql(query, conn)
+                
+                if not df.empty:
+                    st.dataframe(df, use_container_width=True)
+                    st.write(f"총 `{len(df)}`개의 행을 가져왔습니다 (상위 5개).")
+                else:
+                    st.warning(f"경고: `{table_name}` 테이블에 데이터가 없거나, 상위 5줄을 가져오지 못했습니다.")
+            except Exception as e:
+                st.error(f"`{table_name}` 테이블 조회 오류: {e}")
+                st.info("테이블 이름이 정확한지, 그리고 해당 테이블에 접근 권한이 있는지 확인해주세요.")
 
     else:
         st.subheader("❌ 데이터베이스 연결 상태: 실패")
@@ -154,6 +109,6 @@ finally:
         conn.close()
         st.info("PyMySQL 연결이 닫혔습니다.")
 
-st.sidebar.info("이 앱은 Azure MySQL 연결 및 데이터 조회 테스트를 위한 것입니다.")
+st.sidebar.info("이 앱은 Azure MySQL 테이블 데이터 존재 및 형식 확인을 위한 것입니다.")
 st.sidebar.markdown("---")
-st.sidebar.markdown("© 2025 Value Analyzer Test")
+st.sidebar.markdown(f"© {datetime.datetime.now().year} Quant Analyzer Test")
