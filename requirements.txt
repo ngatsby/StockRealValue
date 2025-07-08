@@ -1,7 +1,5 @@
-pymysql
-SQLAlchemy
-pandas
-numpy
-datetime
-time
-streamlit
+streamlit==1.30.0
+pandas==2.1.4
+numpy==1.26.2
+pymysql==1.1.0
+SQLAlchemy==2.0.25
