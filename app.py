@@ -11,7 +11,7 @@ import streamlit as st # Streamlit 라이브러리 임포트
 # .streamlit/secrets.toml 파일에 다음 형식으로 저장:
 # [mysql]
 # host = "quant.mysql.database.azure.com"
-# user = "quant" # Azure MySQL 사용자명은 사용자명@서버이름 형식입니다. 예: user@server_name
+# user = "quant@quant" # Azure MySQL 사용자명은 사용자명@서버이름 형식입니다. 예: user@server_name
 # password = "a303737!"
 # database = "stock_db"
 # charset = "utf8"
@@ -171,6 +171,11 @@ def calculate_intrinsic_value_per_share(stock_code, base_date, bond_10yr_rate_in
     data_for_return = {
         '내재가치': np.nan,
         '종가': np.nan,
+        'PBR': np.nan,
+        'PER': np.nan,
+        'PCR': np.nan,
+        'PSR': np.nan,
+        'DY': np.nan, # DY로 변경
         '워렌버핏DCF_적정주가': np.nan,
         '계산상태': '실패',
         '실패사유': '초기화'
@@ -275,7 +280,14 @@ def calculate_intrinsic_value_per_share(stock_code, base_date, bond_10yr_rate_in
         intrinsic_value_per_share = (adjusted_capital / shares_excluding_treasury) * capital_multiplier
         data_for_return['내재가치'] = intrinsic_value_per_share
 
-          # --- 워렌 버핏 DCF 적정주가 계산 (간이 모델) ---
+        # --- 추가 지표 가져오기 (kor_value에서 가져옴) ---
+        data_for_return['PBR'] = get_value_data(cursor, stock_code, 'PBR')
+        data_for_return['PER'] = get_value_data(cursor, stock_code, 'PER')
+        data_for_return['PCR'] = get_value_data(cursor, stock_code, 'PCR')
+        data_for_return['PSR'] = get_value_data(cursor, stock_code, 'PSR')
+        data_for_return['DY'] = get_value_data(cursor, stock_code, 'DY') # DY로 변경하여 kor_value에서 가져옴
+
+        # --- 워렌 버핏 DCF 적정주가 계산 (간이 모델) ---
         eps = net_income / shares_excluding_treasury if shares_excluding_treasury != 0 else 0
 
         roe_raw = get_financial_data(cursor, stock_code, base_date, '자본', public_type='y') 
@@ -415,6 +427,7 @@ if st.sidebar.button("내재가치 계산 시작"):
             output_columns = [
                 '종목명', '종목코드', '종가', '내재가치', '내재가치-종가비율(%)', 
                 '워렌버핏DCF_적정주가', '워렌버핏DCF-종가비율(%)',
+                'PBR', 'PER', 'PCR', 'PSR', 'DY', # DY로 변경
                 '계산상태', '실패사유'
             ]
             final_df = results_df[output_columns].copy()
@@ -424,7 +437,7 @@ if st.sidebar.button("내재가치 계산 시작"):
             for col in ['종가', '내재가치', '워렌버핏DCF_적정주가']:
                 final_df[col] = final_df[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else None)
             
-            for col in ['내재가치-종가비율(%)', '워렌버핏DCF-종가비율(%)']: # DY로 변경
+            for col in ['내재가치-종가비율(%)', '워렌버핏DCF-종가비율(%)', 'PBR', 'PER', 'PCR', 'PSR', 'DY']: # DY로 변경
                 final_df[col] = final_df[col].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else None)
 
 
